@@ -14,7 +14,12 @@
 #include "arm_math.h"
 
 const static float32_t enc_diameter[2] = {51.009105f, 50.475733f};
-const static float32_t enc_cali_cos[2] = {1.0000000f, 0.9999656f};
+/**
+ * sin θ0   -sin θ1
+ * cos θ0   cos θ1
+ */
+const static float32_t enc_transfer[2][2] = {{0.7152604859f, -0.6873711224f},
+                                             {0.6862684959f, 0.7263063679f}};
 
 /* x坐标 */
 float g_pos_x = 0.0f;
@@ -33,25 +38,23 @@ float g_pos_yaw_offset = 0.0f;
 void position_calc(void) {
     static int64_t last_encoder_position[2]; /* 上次编码器的值, 做差 */
 
+    static float32_t enc_delta[2];
     static float32_t enc_axis[2];
-    static float32_t enc_delta[2][2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
-    static float32_t enc_transfer[2] = {enc_cali_cos[0] * PI * enc_diameter[0],
-                                        enc_cali_cos[1] * PI * enc_diameter[1]};
-
-    /* 编码器差值转换到坐标点矩阵 */
-    const static arm_matrix_instance_f32 enc_transfer_matrix = {
-        .numCols = 1, .numRows = 2, .pData = enc_transfer};
-    /* 编码器差值矩阵 */
-    const static arm_matrix_instance_f32 enc_delta_matrix = {
-        .numCols = 2, .numRows = 2, .pData = &enc_delta[0][0]};
-    /* 编码器坐标系矩阵 */
-    static arm_matrix_instance_f32 enc_axis_matrix = {
-        .numCols = 1, .numRows = 2, .pData = &enc_axis[0]};
 
     static float32_t real_axis[2];
     static float32_t real_transfer[2][2];
 
-    /* 全场定位坐标系矩阵 */
+    /* 编码器差值矩阵 */
+    const static arm_matrix_instance_f32 enc_delta_matrix = {
+        .numCols = 1, .numRows = 2, .pData = &enc_delta[0]};
+    /* 编码器上的坐标 */
+    const static arm_matrix_instance_f32 enc_transfer_matrix = {
+        .numCols = 2, .numRows = 2, .pData = &enc_transfer[0][0]};
+    /* 编码器坐标系矩阵 */
+    static arm_matrix_instance_f32 enc_axis_matrix = {
+        .numCols = 1, .numRows = 2, .pData = &enc_axis[0]};
+
+    /* 实际坐标系转换矩阵(将编码器坐标旋转 yaw 角度) */
     static arm_matrix_instance_f32 real_axis_matrix = {
         .numCols = 1, .numRows = 2, .pData = &real_axis[0]};
     const static arm_matrix_instance_f32 real_transfer_matrix = {
@@ -60,13 +63,17 @@ void position_calc(void) {
     /* 更新编码器差值矩阵 */
     as5047_get_relative_position(0);
     as5047_get_relative_position(1);
-    /* 编码器 x 轴需要反一下 */
-    enc_delta[0][0] = (float)(g_as5047_position[0].total_position -
-                              last_encoder_position[0]) /
-                      (float)AS5047_CIRCLE_CNT;
-    enc_delta[1][1] = (float)(last_encoder_position[1] -
-                              g_as5047_position[1].total_position) /
-                      (float)AS5047_CIRCLE_CNT;
+
+    enc_delta[0] = ((float)(g_as5047_position[0].total_position -
+                            last_encoder_position[0]) /
+                    (float)AS5047_CIRCLE_CNT) *
+                   PI * enc_diameter[0];
+
+    enc_delta[1] = ((float)(last_encoder_position[1] -
+                            g_as5047_position[1].total_position) /
+                    (float)AS5047_CIRCLE_CNT) *
+                   PI * enc_diameter[1];
+
     last_encoder_position[0] = g_as5047_position[0].total_position;
     last_encoder_position[1] = g_as5047_position[1].total_position;
 
@@ -83,7 +90,7 @@ void position_calc(void) {
 
     g_pos_yaw = g_wit_angle[WIT_YAW] + g_pos_yaw_offset;
     float32_t sin_val, cos_val;
-    arm_sin_cos_f32(-(g_pos_yaw + 45.0f), &sin_val, &cos_val);
+    arm_sin_cos_f32(-g_pos_yaw, &sin_val, &cos_val);
 
     real_transfer[0][0] = cos_val;
     real_transfer[0][1] = sin_val;
